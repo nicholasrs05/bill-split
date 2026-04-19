@@ -1,0 +1,18 @@
+# Dependency folders (Ini yang paling penting!)
+node_modules/
+
+# Environment variables (Biar rahasia kau nggak bocor)
+.env
+.env.local
+
+# Build outputs
+dist/
+build/
+
+# Log files
+npm-debug.log*
+yarn-error.log*
+
+# Folder IDE
+.vscode/
+.idea/

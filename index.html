@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bill Splitter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Serif+Display:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              paper: '#FAF7F2',
+              ink: '#1A1A2E',
+              accent: '#F59E0B'
+            },
+            fontFamily: {
+              display: ['DM Serif Display', 'serif'],
+              mono: ['DM Mono', 'monospace']
+            },
+            boxShadow: {
+              ledger: '0 10px 30px rgba(26, 26, 46, 0.08)'
+            }
+          }
+        }
+      };
+    </script>
+  </head>
+  <body class="bg-paper text-ink">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
