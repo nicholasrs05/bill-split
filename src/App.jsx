@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Download,
   Plus,
@@ -10,285 +10,26 @@ import {
   PencilLine,
   X,
 } from 'lucide-react';
-
-const initialParticipants = ['Alice', 'Bob', 'Charlie'];
-
-function formatRupiah(value) {
-  const rounded = Math.round(Number.isFinite(value) ? value : 0);
-  return `Rp ${rounded.toLocaleString('id-ID')}`;
-}
-
-function sanitizeNumber(input) {
-  if (typeof input === 'number') {
-    return Number.isFinite(input) ? input : 0;
-  }
-  const normalized = String(input ?? '')
-    .trim()
-    .replace(/\./g, '')
-    .replace(/[^\d.-]/g, '');
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function parseItemTokens(input) {
-  if (!input) {
-    return [];
-  }
-  return String(input)
-    .split(/[\s,]+/)
-    .map((token) => sanitizeNumber(token))
-    .filter((n) => n > 0)
-    .map((n) => Math.round(n));
-}
-
-function createPersonEntries(participants, paidBy, existing = []) {
-  const map = new Map(existing.map((entry) => [entry.participant, entry]));
-  return participants
-    .filter((participant) => participant !== paidBy)
-    .map((participant) => ({
-      participant,
-      items: map.get(participant)?.items ?? [],
-      draft: '',
-    }));
-}
-
-function normalizeSharedItems(sharedItems, selectedParticipants) {
-  return (sharedItems ?? []).map((item) => {
-    const weights = {};
-    selectedParticipants.forEach((participant) => {
-      weights[participant] = sanitizeNumber(item.weights?.[participant]);
-    });
-    return {
-      ...item,
-      weights,
-    };
-  });
-}
-
-function createDefaultForm() {
-  return {
-    title: '',
-    selectedParticipants: [],
-    paidBy: '',
-    taxPercent: 0,
-    equalSplit: false,
-    equalSplitTotal: 0,
-    personEntries: [],
-    sharedItems: [],
-  };
-}
-
-function computeSharedAllocations(sharedItems, selectedParticipants) {
-  const allocation = {};
-  selectedParticipants.forEach((participant) => {
-    allocation[participant] = 0;
-  });
-
-  (sharedItems ?? []).forEach((item) => {
-    const amount = Math.max(0, sanitizeNumber(item.amount));
-    if (amount <= 0) {
-      return;
-    }
-
-    const participantsWithWeight = selectedParticipants
-      .map((participant) => ({
-        participant,
-        weight: Math.max(0, sanitizeNumber(item.weights?.[participant])),
-      }))
-      .filter((entry) => entry.weight > 0);
-
-    const totalWeight = participantsWithWeight.reduce((sum, entry) => sum + entry.weight, 0);
-    if (totalWeight <= 0) {
-      return;
-    }
-
-    participantsWithWeight.forEach((entry) => {
-      const share = Math.round((amount * entry.weight) / totalWeight);
-      allocation[entry.participant] = (allocation[entry.participant] ?? 0) + share;
-    });
-  });
-
-  return allocation;
-}
-
-function buildBreakdown(expense) {
-  const taxPercent = sanitizeNumber(expense.taxPercent);
-  const taxFactor = 1 + taxPercent / 100;
-  const selectedParticipants = (expense.selectedParticipants ?? expense.includedParticipants ?? []).filter(Boolean);
-
-  if (expense.equalSplit) {
-    const included = selectedParticipants;
-    if (included.length === 0) {
-      return { rows: [], total: 0 };
-    }
-    const total = sanitizeNumber(expense.equalSplitTotal);
-    const shareBeforeTax = total / included.length;
-    const shareAfterTax = Math.round(shareBeforeTax * taxFactor);
-
-    const rows = included
-      .filter((participant) => participant !== expense.paidBy)
-      .map((participant) => ({
-        participant,
-        subtotal: Math.round(shareBeforeTax),
-        afterTax: shareAfterTax,
-      }));
-
-    return {
-      rows,
-      total: rows.reduce((sum, row) => sum + row.afterTax, 0),
-      payerShareAfterTax: shareAfterTax,
-    };
-  }
-
-  const sharedAllocations = computeSharedAllocations(expense.sharedItems ?? [], selectedParticipants);
-  const entryMap = new Map((expense.entries ?? []).map((entry) => [entry.participant, entry]));
-
-  const rows = selectedParticipants
-    .filter((participant) => participant !== expense.paidBy)
-    .map((participant) => {
-      const ownItems = entryMap.get(participant)?.items ?? [];
-      const ownSubtotal = Math.round(ownItems.reduce((sum, item) => sum + sanitizeNumber(item), 0));
-      const sharedSubtotal = Math.round(sharedAllocations[participant] ?? 0);
-      const subtotal = ownSubtotal + sharedSubtotal;
-      const afterTax = Math.round(subtotal * taxFactor);
-      return {
-        participant,
-        subtotal,
-        afterTax,
-      };
-    })
-    .filter((row) => row.afterTax > 0);
-
-  return {
-    rows,
-    total: rows.reduce((sum, row) => sum + row.afterTax, 0),
-  };
-}
-
-function computeDebts(expenses) {
-  const rawRows = [];
-  const matrix = {};
-
-  const addToMatrix = (debtor, creditor, amount) => {
-    if (!matrix[debtor]) {
-      matrix[debtor] = {};
-    }
-    matrix[debtor][creditor] = (matrix[debtor][creditor] ?? 0) + amount;
-  };
-
-  expenses.forEach((expense) => {
-    const breakdown = buildBreakdown(expense);
-    breakdown.rows.forEach((row) => {
-      const amount = Math.round(row.afterTax);
-      if (amount <= 0) {
-        return;
-      }
-      rawRows.push({
-        debtor: row.participant,
-        creditor: expense.paidBy,
-        expenseTitle: expense.title,
-        amount,
-      });
-      addToMatrix(row.participant, expense.paidBy, amount);
-    });
-  });
-
-  const people = new Set();
-  Object.keys(matrix).forEach((debtor) => {
-    people.add(debtor);
-    Object.keys(matrix[debtor]).forEach((creditor) => people.add(creditor));
-  });
-  const participants = [...people].sort();
-
-  const netRows = [];
-  for (let i = 0; i < participants.length; i += 1) {
-    for (let j = i + 1; j < participants.length; j += 1) {
-      const a = participants[i];
-      const b = participants[j];
-      const aToB = matrix[a]?.[b] ?? 0;
-      const bToA = matrix[b]?.[a] ?? 0;
-
-      if (aToB > bToA) {
-        netRows.push({
-          debtor: a,
-          creditor: b,
-          amount: Math.round(aToB - bToA),
-        });
-      } else if (bToA > aToB) {
-        netRows.push({
-          debtor: b,
-          creditor: a,
-          amount: Math.round(bToA - aToB),
-        });
-      }
-    }
-  }
-
-  return { rawRows, netRows };
-}
-
-function buildExpenseSheetRows(expenses) {
-  const rows = [['#', 'Title', 'Paid By', 'Tax %', 'Person', 'Items', 'Subtotal', 'After Tax']];
-
-  expenses.forEach((expense, index) => {
-    const tax = sanitizeNumber(expense.taxPercent);
-    const selectedParticipants = (expense.selectedParticipants ?? expense.includedParticipants ?? []).filter(Boolean);
-
-    if (expense.equalSplit) {
-      const included = selectedParticipants;
-      const total = sanitizeNumber(expense.equalSplitTotal);
-      const share = included.length > 0 ? total / included.length : 0;
-      included.forEach((participant) => {
-        const afterTax = Math.round(share * (1 + tax / 100));
-        rows.push([
-          index + 1,
-          expense.title,
-          expense.paidBy,
-          tax,
-          participant,
-          'equal share',
-          Math.round(share),
-          afterTax,
-        ]);
-      });
-      return;
-    }
-
-    const sharedAllocations = computeSharedAllocations(expense.sharedItems ?? [], selectedParticipants);
-    const entryMap = new Map((expense.entries ?? []).map((entry) => [entry.participant, entry]));
-
-    selectedParticipants.forEach((participant) => {
-      const ownItems = entryMap.get(participant)?.items ?? [];
-      const ownSubtotal = Math.round(ownItems.reduce((sum, item) => sum + sanitizeNumber(item), 0));
-      const sharedSubtotal = Math.round(sharedAllocations[participant] ?? 0);
-      const subtotal = ownSubtotal + sharedSubtotal;
-      const afterTax = Math.round(subtotal * (1 + tax / 100));
-      const itemDetails = [];
-      if (ownItems.length > 0) {
-        itemDetails.push(ownItems.join(', '));
-      }
-      if (sharedSubtotal > 0) {
-        itemDetails.push(`shared ${sharedSubtotal}`);
-      }
-      rows.push([
-        index + 1,
-        expense.title,
-        expense.paidBy,
-        tax,
-        participant,
-        itemDetails.join(' | '),
-        subtotal,
-        afterTax,
-      ]);
-    });
-  });
-
-  return rows;
-}
+import ConfirmDialog from './components/ConfirmDialog';
+import { APP_STORAGE_KEY, initialParticipants } from './config/billConfig';
+import {
+  buildBreakdown,
+  buildExpenseSheetRows,
+  computeDebts,
+  computeSharedAllocations,
+  createDefaultForm,
+  createPersonEntries,
+  formatRupiah,
+  loadPersistedAppState,
+  normalizeSharedItems,
+  parseItemTokens,
+  sanitizeNumber,
+} from './utils/billHelpers';
 
 export default function App() {
-  const [participants, setParticipants] = useState(initialParticipants);
-  const [expenses, setExpenses] = useState([]);
+  const persistedState = useMemo(() => loadPersistedAppState(), []);
+  const [participants, setParticipants] = useState(persistedState.participants);
+  const [expenses, setExpenses] = useState(persistedState.expenses);
   const [participantInput, setParticipantInput] = useState('');
   const [form, setForm] = useState(createDefaultForm());
   const [expandedExpenseIds, setExpandedExpenseIds] = useState({});
@@ -296,6 +37,9 @@ export default function App() {
   const [validationError, setValidationError] = useState('');
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [participantToConfirmRemoval, setParticipantToConfirmRemoval] = useState(null);
+  const [expenseToConfirmDeletion, setExpenseToConfirmDeletion] = useState(null);
 
   const { rawRows, netRows } = useMemo(() => computeDebts(expenses), [expenses]);
   const expenseSheetRows = useMemo(() => buildExpenseSheetRows(expenses), [expenses]);
@@ -303,6 +47,20 @@ export default function App() {
     () => computeSharedAllocations(form.sharedItems ?? [], form.selectedParticipants ?? []),
     [form.sharedItems, form.selectedParticipants]
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(
+      APP_STORAGE_KEY,
+      JSON.stringify({
+        participants,
+        expenses,
+      })
+    );
+  }, [participants, expenses]);
 
   const addParticipant = () => {
     const nextName = participantInput.trim();
@@ -322,24 +80,7 @@ export default function App() {
     setValidationError('');
   };
 
-  const removeParticipant = (name) => {
-    const used = expenses.some(
-      (expense) =>
-        expense.paidBy === name ||
-        (expense.entries ?? []).some((entry) => entry.participant === name) ||
-        (expense.includedParticipants ?? []).includes(name) ||
-        (expense.selectedParticipants ?? []).includes(name)
-    );
-
-    if (used) {
-      const confirmed = window.confirm(
-        `${name} appears in existing expenses. Removing this participant will also remove affected rows from those expenses. Continue?`
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-
+  const applyRemoveParticipant = (name) => {
     const nextParticipants = participants.filter((participant) => participant !== name);
 
     setExpenses((prev) =>
@@ -396,6 +137,23 @@ export default function App() {
         sharedItems: normalizeSharedItems(prev.sharedItems ?? [], selectedParticipants),
       };
     });
+  };
+
+  const removeParticipant = (name) => {
+    const used = expenses.some(
+      (expense) =>
+        expense.paidBy === name ||
+        (expense.entries ?? []).some((entry) => entry.participant === name) ||
+        (expense.includedParticipants ?? []).includes(name) ||
+        (expense.selectedParticipants ?? []).includes(name)
+    );
+
+    if (used) {
+      setParticipantToConfirmRemoval(name);
+      return;
+    }
+
+    applyRemoveParticipant(name);
   };
 
   const openCreateExpenseModal = () => {
@@ -657,12 +415,12 @@ export default function App() {
     setValidationError('');
   };
 
-  const deleteExpense = (expenseId) => {
-    const confirmed = window.confirm('Delete this expense?');
-    if (!confirmed) {
-      return;
-    }
+  const applyDeleteExpense = (expenseId) => {
     setExpenses((prev) => prev.filter((expense) => expense.id !== expenseId));
+  };
+
+  const deleteExpense = (expenseId) => {
+    setExpenseToConfirmDeletion(expenseId);
   };
 
   const editExpense = (expenseId) => {
@@ -735,6 +493,54 @@ export default function App() {
     XLSX.writeFile(wb, 'bill-split.xlsx');
   };
 
+  const resetAllContent = () => {
+    setIsResetDialogOpen(true);
+  };
+
+  const confirmResetAllContent = () => {
+    setIsResetDialogOpen(false);
+
+    setParticipants(initialParticipants);
+    setExpenses([]);
+    setParticipantInput('');
+    setForm(createDefaultForm());
+    setExpandedExpenseIds({});
+    setShowRawDebts(true);
+    setValidationError('');
+    setEditingExpenseId(null);
+    setIsExpenseModalOpen(false);
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(APP_STORAGE_KEY);
+    }
+  };
+
+  const closeResetDialog = () => {
+    setIsResetDialogOpen(false);
+  };
+
+  const closeParticipantRemovalDialog = () => {
+    setParticipantToConfirmRemoval(null);
+  };
+
+  const confirmParticipantRemoval = () => {
+    if (participantToConfirmRemoval) {
+      applyRemoveParticipant(participantToConfirmRemoval);
+    }
+    setParticipantToConfirmRemoval(null);
+  };
+
+  const closeExpenseDeletionDialog = () => {
+    setExpenseToConfirmDeletion(null);
+  };
+
+  const confirmExpenseDeletion = () => {
+    if (expenseToConfirmDeletion) {
+      applyDeleteExpense(expenseToConfirmDeletion);
+    }
+    setExpenseToConfirmDeletion(null);
+  };
+
   return (
     <div className="min-h-screen paper-noise px-4 py-6 sm:px-6 lg:px-8">
       <style>{`
@@ -784,13 +590,22 @@ export default function App() {
                 Track shared expenses, apply tax fairly, and settle with clean net debts.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={exportExcel}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-ink/20 bg-ink px-4 py-2 font-mono text-sm text-paper transition hover:-translate-y-0.5 hover:bg-ink/90"
-            >
-              <Download size={16} /> Export Excel
-            </button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={resetAllContent}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 font-mono text-sm text-red-700 transition hover:-translate-y-0.5 hover:bg-red-100"
+              >
+                <Trash2 size={16} /> Refresh Content
+              </button>
+              <button
+                type="button"
+                onClick={exportExcel}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-ink/20 bg-ink px-4 py-2 font-mono text-sm text-paper transition hover:-translate-y-0.5 hover:bg-ink/90"
+              >
+                <Download size={16} /> Export Excel
+              </button>
+            </div>
           </div>
         </header>
 
@@ -1246,6 +1061,43 @@ export default function App() {
             </div>
           </div>
         )}
+
+        <ConfirmDialog
+          open={isResetDialogOpen}
+          title="Reset All Content?"
+          description="This will permanently erase all participants and expenses from this browser."
+          warning="Recommended: Export to Excel first so you keep a backup before resetting."
+          confirmLabel="Yes, Reset Everything"
+          onCancel={closeResetDialog}
+          onConfirm={confirmResetAllContent}
+          ariaLabel="Close reset confirmation dialog"
+        />
+
+        <ConfirmDialog
+          open={Boolean(participantToConfirmRemoval)}
+          title="Remove Participant?"
+          description={
+            participantToConfirmRemoval
+              ? `${participantToConfirmRemoval} appears in existing expenses.`
+              : ''
+          }
+          warning="Continuing will remove this participant and also remove affected rows from existing expenses."
+          confirmLabel="Yes, Remove Participant"
+          onCancel={closeParticipantRemovalDialog}
+          onConfirm={confirmParticipantRemoval}
+          ariaLabel="Close participant removal confirmation dialog"
+        />
+
+        <ConfirmDialog
+          open={Boolean(expenseToConfirmDeletion)}
+          title="Delete Expense?"
+          description="This expense will be permanently removed from your current ledger."
+          warning="Recommended: Export to Excel first if you might need this record later."
+          confirmLabel="Yes, Delete Expense"
+          onCancel={closeExpenseDeletionDialog}
+          onConfirm={confirmExpenseDeletion}
+          ariaLabel="Close expense deletion confirmation dialog"
+        />
 
         <section className="rounded-2xl border border-ink/10 bg-white/85 p-5 shadow-ledger backdrop-blur">
           <div className="flex items-center justify-between">
