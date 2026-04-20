@@ -97,7 +97,41 @@ export function createDefaultForm() {
     equalSplitTotal: 0,
     personEntries: [],
     sharedItems: [],
+    discounts: [],
+    extraFees: [],
   };
+}
+
+export function normalizeAdjustments(adjustments = []) {
+  return (adjustments ?? [])
+    .map((item) => ({
+      id: item.id ?? crypto.randomUUID(),
+      label: (item.label ?? '').toString().trim(),
+      mode: item.mode === 'percent' ? 'percent' : 'nominal',
+      value: Math.max(0, sanitizeNumber(item.value)),
+    }))
+    .filter((item) => item.value > 0);
+}
+
+export function computeFinalAmountAfterAdjustments(afterTaxAmount, participantCount, discounts = [], extraFees = []) {
+  const base = Math.max(0, sanitizeNumber(afterTaxAmount));
+  const count = Math.max(1, sanitizeNumber(participantCount));
+
+  const totalDiscount = normalizeAdjustments(discounts).reduce((sum, item) => {
+    if (item.mode === 'percent') {
+      return sum + (base * item.value) / 100;
+    }
+    return sum + item.value / count;
+  }, 0);
+
+  const totalExtraFee = normalizeAdjustments(extraFees).reduce((sum, item) => {
+    if (item.mode === 'percent') {
+      return sum + (base * item.value) / 100;
+    }
+    return sum + item.value / count;
+  }, 0);
+
+  return Math.max(0, Math.round(base - totalDiscount + totalExtraFee));
 }
 
 export function computeSharedAllocations(sharedItems, selectedParticipants) {
@@ -137,6 +171,9 @@ export function buildBreakdown(expense) {
   const taxPercent = sanitizeNumber(expense.taxPercent);
   const taxFactor = 1 + taxPercent / 100;
   const selectedParticipants = (expense.selectedParticipants ?? expense.includedParticipants ?? []).filter(Boolean);
+  const participantCount = Math.max(1, selectedParticipants.length);
+  const discounts = normalizeAdjustments(expense.discounts ?? []);
+  const extraFees = normalizeAdjustments(expense.extraFees ?? []);
 
   if (expense.equalSplit) {
     const included = selectedParticipants;
@@ -153,11 +190,12 @@ export function buildBreakdown(expense) {
         participant,
         subtotal: Math.round(shareBeforeTax),
         afterTax: shareAfterTax,
+        finalAmount: computeFinalAmountAfterAdjustments(shareAfterTax, participantCount, discounts, extraFees),
       }));
 
     return {
       rows,
-      total: rows.reduce((sum, row) => sum + row.afterTax, 0),
+      total: rows.reduce((sum, row) => sum + row.finalAmount, 0),
       payerShareAfterTax: shareAfterTax,
     };
   }
@@ -173,17 +211,19 @@ export function buildBreakdown(expense) {
       const sharedSubtotal = Math.round(sharedAllocations[participant] ?? 0);
       const subtotal = ownSubtotal + sharedSubtotal;
       const afterTax = Math.round(subtotal * taxFactor);
+      const finalAmount = computeFinalAmountAfterAdjustments(afterTax, participantCount, discounts, extraFees);
       return {
         participant,
         subtotal,
         afterTax,
+        finalAmount,
       };
     })
-    .filter((row) => row.afterTax > 0);
+    .filter((row) => row.finalAmount > 0);
 
   return {
     rows,
-    total: rows.reduce((sum, row) => sum + row.afterTax, 0),
+    total: rows.reduce((sum, row) => sum + row.finalAmount, 0),
   };
 }
 
@@ -201,7 +241,7 @@ export function computeDebts(expenses) {
   expenses.forEach((expense) => {
     const breakdown = buildBreakdown(expense);
     breakdown.rows.forEach((row) => {
-      const amount = Math.round(row.afterTax);
+      const amount = Math.round(row.finalAmount ?? row.afterTax);
       if (amount <= 0) {
         return;
       }
@@ -250,11 +290,14 @@ export function computeDebts(expenses) {
 }
 
 export function buildExpenseSheetRows(expenses) {
-  const rows = [['#', 'Title', 'Paid By', 'Tax %', 'Person', 'Items', 'Subtotal', 'After Tax']];
+  const rows = [['#', 'Title', 'Paid By', 'Tax %', 'Person', 'Items', 'Subtotal', 'After Tax', 'Final Amount']];
 
   expenses.forEach((expense, index) => {
     const tax = sanitizeNumber(expense.taxPercent);
     const selectedParticipants = (expense.selectedParticipants ?? expense.includedParticipants ?? []).filter(Boolean);
+    const participantCount = Math.max(1, selectedParticipants.length);
+    const discounts = normalizeAdjustments(expense.discounts ?? []);
+    const extraFees = normalizeAdjustments(expense.extraFees ?? []);
 
     if (expense.equalSplit) {
       const included = selectedParticipants;
@@ -262,6 +305,7 @@ export function buildExpenseSheetRows(expenses) {
       const share = included.length > 0 ? total / included.length : 0;
       included.forEach((participant) => {
         const afterTax = Math.round(share * (1 + tax / 100));
+        const finalAmount = computeFinalAmountAfterAdjustments(afterTax, participantCount, discounts, extraFees);
         rows.push([
           index + 1,
           expense.title,
@@ -271,6 +315,7 @@ export function buildExpenseSheetRows(expenses) {
           'equal share',
           Math.round(share),
           afterTax,
+          finalAmount,
         ]);
       });
       return;
@@ -285,6 +330,7 @@ export function buildExpenseSheetRows(expenses) {
       const sharedSubtotal = Math.round(sharedAllocations[participant] ?? 0);
       const subtotal = ownSubtotal + sharedSubtotal;
       const afterTax = Math.round(subtotal * (1 + tax / 100));
+      const finalAmount = computeFinalAmountAfterAdjustments(afterTax, participantCount, discounts, extraFees);
       const itemDetails = [];
       if (ownItems.length > 0) {
         itemDetails.push(ownItems.join(', '));
@@ -301,6 +347,7 @@ export function buildExpenseSheetRows(expenses) {
         itemDetails.join(' | '),
         subtotal,
         afterTax,
+        finalAmount,
       ]);
     });
   });

@@ -15,12 +15,14 @@ import { APP_STORAGE_KEY, initialParticipants } from './config/billConfig';
 import {
   buildBreakdown,
   buildExpenseSheetRows,
+  computeFinalAmountAfterAdjustments,
   computeDebts,
   computeSharedAllocations,
   createDefaultForm,
   createPersonEntries,
   formatRupiah,
   loadPersistedAppState,
+  normalizeAdjustments,
   normalizeSharedItems,
   parseItemTokens,
   sanitizeNumber,
@@ -46,6 +48,75 @@ export default function App() {
   const formSharedAllocations = useMemo(
     () => computeSharedAllocations(form.sharedItems ?? [], form.selectedParticipants ?? []),
     [form.sharedItems, form.selectedParticipants]
+  );
+  const normalizedFormDiscounts = useMemo(() => normalizeAdjustments(form.discounts ?? []), [form.discounts]);
+  const normalizedFormExtraFees = useMemo(() => normalizeAdjustments(form.extraFees ?? []), [form.extraFees]);
+  const expensePreviewBreakdown = useMemo(() => {
+    const selectedParticipants = (form.selectedParticipants ?? []).filter((participant) => participants.includes(participant));
+    const paidBy = form.paidBy;
+
+    if (selectedParticipants.length === 0 || !paidBy || !selectedParticipants.includes(paidBy)) {
+      return { rows: [], total: 0 };
+    }
+
+    const previewExpense = {
+      id: 'preview',
+      title: form.title || 'Preview',
+      paidBy,
+      taxPercent: Math.max(0, sanitizeNumber(form.taxPercent)),
+      equalSplit: Boolean(form.equalSplit),
+      equalSplitTotal: Math.max(0, sanitizeNumber(form.equalSplitTotal)),
+      selectedParticipants,
+      includedParticipants: selectedParticipants,
+      discounts: normalizedFormDiscounts,
+      extraFees: normalizedFormExtraFees,
+    };
+
+    if (previewExpense.equalSplit) {
+      previewExpense.entries = [];
+      previewExpense.sharedItems = [];
+      return buildBreakdown(previewExpense);
+    }
+
+    previewExpense.entries = (form.personEntries ?? [])
+      .map((entry) => ({
+        participant: entry.participant,
+        items: (entry.items ?? []).map((item) => Math.max(0, Math.round(sanitizeNumber(item)))).filter((item) => item > 0),
+      }))
+      .filter((entry) => selectedParticipants.includes(entry.participant));
+
+    previewExpense.sharedItems = (form.sharedItems ?? [])
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        amount: Math.max(0, Math.round(sanitizeNumber(item.amount))),
+        weights: Object.fromEntries(
+          selectedParticipants.map((participant) => [participant, Math.max(0, sanitizeNumber(item.weights?.[participant]))])
+        ),
+      }))
+      .filter((item) => item.amount > 0);
+
+    return buildBreakdown(previewExpense);
+  }, [
+    form.selectedParticipants,
+    form.paidBy,
+    form.title,
+    form.taxPercent,
+    form.equalSplit,
+    form.equalSplitTotal,
+    form.personEntries,
+    form.sharedItems,
+    normalizedFormDiscounts,
+    normalizedFormExtraFees,
+    participants,
+  ]);
+  const expensePreviewTotals = useMemo(
+    () => ({
+      subtotal: expensePreviewBreakdown.rows.reduce((sum, row) => sum + (row.subtotal ?? 0), 0),
+      afterTax: expensePreviewBreakdown.rows.reduce((sum, row) => sum + (row.afterTax ?? 0), 0),
+      final: expensePreviewBreakdown.rows.reduce((sum, row) => sum + (row.finalAmount ?? row.afterTax ?? 0), 0),
+    }),
+    [expensePreviewBreakdown]
   );
 
   useEffect(() => {
@@ -295,6 +366,35 @@ export default function App() {
     }));
   };
 
+  const addAdjustment = (kind) => {
+    setForm((prev) => ({
+      ...prev,
+      [kind]: [
+        ...(prev[kind] ?? []),
+        {
+          id: crypto.randomUUID(),
+          label: '',
+          mode: 'nominal',
+          value: '',
+        },
+      ],
+    }));
+  };
+
+  const updateAdjustment = (kind, adjustmentId, key, value) => {
+    setForm((prev) => ({
+      ...prev,
+      [kind]: (prev[kind] ?? []).map((item) => (item.id === adjustmentId ? { ...item, [key]: value } : item)),
+    }));
+  };
+
+  const removeAdjustment = (kind, adjustmentId) => {
+    setForm((prev) => ({
+      ...prev,
+      [kind]: (prev[kind] ?? []).filter((item) => item.id !== adjustmentId),
+    }));
+  };
+
   const submitExpense = (event) => {
     event.preventDefault();
 
@@ -303,6 +403,8 @@ export default function App() {
     const paidBy = form.paidBy;
     const selectedParticipants = form.selectedParticipants.filter((participant) => participants.includes(participant));
     const taxPercent = Math.max(0, sanitizeNumber(form.taxPercent));
+    const discounts = normalizeAdjustments(form.discounts ?? []);
+    const extraFees = normalizeAdjustments(form.extraFees ?? []);
 
     if (!title) {
       errors.push('Title is required.');
@@ -345,6 +447,8 @@ export default function App() {
         includedParticipants: selectedParticipants,
         entries: [],
         sharedItems: [],
+        discounts,
+        extraFees,
       };
     } else {
       const sharedItemsWithPositiveAmount = (form.sharedItems ?? []).filter((item) => sanitizeNumber(item.amount) > 0);
@@ -397,6 +501,8 @@ export default function App() {
         includedParticipants: selectedParticipants,
         entries,
         sharedItems,
+        discounts,
+        extraFees,
       };
     }
 
@@ -454,6 +560,8 @@ export default function App() {
             }))
           ),
       sharedItems: normalizeSharedItems(target.sharedItems ?? [], selectedParticipants),
+      discounts: target.discounts ?? [],
+      extraFees: target.extraFees ?? [],
     });
 
     setValidationError('');
@@ -727,6 +835,7 @@ export default function App() {
                               <th className="px-2 py-2 font-medium">Person</th>
                               <th className="px-2 py-2 font-medium">Subtotal</th>
                               <th className="px-2 py-2 font-medium">After Tax</th>
+                              <th className="px-2 py-2 font-medium">Final</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -735,6 +844,7 @@ export default function App() {
                                 <td className="px-2 py-2">{row.participant}</td>
                                 <td className="px-2 py-2 font-mono">{formatRupiah(row.subtotal)}</td>
                                 <td className="px-2 py-2 font-mono">{formatRupiah(row.afterTax)}</td>
+                                <td className="px-2 py-2 font-mono">{formatRupiah(row.finalAmount)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -773,7 +883,9 @@ export default function App() {
                 </button>
               </div>
 
-              <form onSubmit={submitExpense} className="max-h-[80vh] space-y-4 overflow-y-auto pr-1">
+              <form onSubmit={submitExpense} className="max-h-[80vh] overflow-y-auto pr-1">
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="space-y-4">
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="md:col-span-2">
                     <label htmlFor="expenseTitle" className="mb-1 block text-sm font-medium text-ink/80">
@@ -892,13 +1004,19 @@ export default function App() {
                         const sharedSubtotal = formSharedAllocations[entry.participant] ?? 0;
                         const subtotal = ownSubtotal + sharedSubtotal;
                         const afterTax = Math.round(subtotal * (1 + sanitizeNumber(form.taxPercent) / 100));
+                        const finalAmount = computeFinalAmountAfterAdjustments(
+                          afterTax,
+                          form.selectedParticipants.length,
+                          normalizedFormDiscounts,
+                          normalizedFormExtraFees
+                        );
                         return (
                           <div key={entry.participant} className="fade-in rounded-xl border border-ink/15 bg-white p-3">
                             <div className="mb-2 flex items-center justify-between gap-3">
                               <p className="font-medium">{entry.participant}</p>
                               <p className="font-mono text-xs text-ink/70">
                                 Own: {formatRupiah(ownSubtotal)} | Shared: {formatRupiah(sharedSubtotal)} | After tax:{' '}
-                                {formatRupiah(afterTax)}
+                                {formatRupiah(afterTax)} | Final: {formatRupiah(finalAmount)}
                               </p>
                             </div>
 
@@ -1035,13 +1153,201 @@ export default function App() {
                   </>
                 )}
 
+                <div className="space-y-3 rounded-xl border border-ink/15 bg-paper/80 p-4">
+                  <div>
+                    <h3 className="font-medium text-ink">After-Tax Adjustments</h3>
+                    <p className="text-xs text-ink/70">
+                      Discounts and extra fees are applied after tax. Nominal values are split equally across selected participants.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-3 xl:grid-cols-2">
+                    <div className="space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-medium text-ink">Discounts</h4>
+                        <button
+                          type="button"
+                          onClick={() => addAdjustment('discounts')}
+                          className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-white px-2 py-1 text-xs text-red-700"
+                        >
+                          <Plus size={12} /> Add Discount
+                        </button>
+                      </div>
+
+                      {(form.discounts ?? []).length === 0 && (
+                        <p className="rounded-lg bg-white px-3 py-2 text-xs text-ink/60">No discounts added.</p>
+                      )}
+
+                      {(form.discounts ?? []).map((item) => (
+                        <div key={item.id} className="flex flex-wrap gap-2 rounded-lg border border-red-200 bg-white p-2">
+                          <input
+                            type="text"
+                            value={item.label ?? ''}
+                            onChange={(event) => updateAdjustment('discounts', item.id, 'label', event.target.value)}
+                            placeholder="e.g. Voucher"
+                            className="min-w-[160px] flex-1 rounded-md border border-ink/20 px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+                          />
+                          <select
+                            value={item.mode ?? 'nominal'}
+                            onChange={(event) => updateAdjustment('discounts', item.id, 'mode', event.target.value)}
+                            className="w-[130px] rounded-md border border-ink/20 px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+                          >
+                            <option value="nominal">Nominal (Rp)</option>
+                            <option value="percent">Percent (%)</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.value ?? ''}
+                            onChange={(event) => updateAdjustment('discounts', item.id, 'value', event.target.value)}
+                            placeholder={item.mode === 'percent' ? '5' : '5000'}
+                            className="w-[110px] rounded-md border border-ink/20 px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeAdjustment('discounts', item.id)}
+                            className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-red-200 text-red-700"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-medium text-ink">Extra Fees</h4>
+                        <button
+                          type="button"
+                          onClick={() => addAdjustment('extraFees')}
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-white px-2 py-1 text-xs text-emerald-700"
+                        >
+                          <Plus size={12} /> Add Fee
+                        </button>
+                      </div>
+
+                      {(form.extraFees ?? []).length === 0 && (
+                        <p className="rounded-lg bg-white px-3 py-2 text-xs text-ink/60">No extra fees added.</p>
+                      )}
+
+                      {(form.extraFees ?? []).map((item) => (
+                        <div key={item.id} className="flex flex-wrap gap-2 rounded-lg border border-emerald-200 bg-white p-2">
+                          <input
+                            type="text"
+                            value={item.label ?? ''}
+                            onChange={(event) => updateAdjustment('extraFees', item.id, 'label', event.target.value)}
+                            placeholder="e.g. Platform fee"
+                            className="min-w-[160px] flex-1 rounded-md border border-ink/20 px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+                          />
+                          <select
+                            value={item.mode ?? 'nominal'}
+                            onChange={(event) => updateAdjustment('extraFees', item.id, 'mode', event.target.value)}
+                            className="w-[130px] rounded-md border border-ink/20 px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+                          >
+                            <option value="nominal">Nominal (Rp)</option>
+                            <option value="percent">Percent (%)</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.value ?? ''}
+                            onChange={(event) => updateAdjustment('extraFees', item.id, 'value', event.target.value)}
+                            placeholder={item.mode === 'percent' ? '5' : '1000'}
+                            className="w-[110px] rounded-md border border-ink/20 px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeAdjustment('extraFees', item.id)}
+                            className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-red-200 text-red-700"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                  </div>
+
+                  <aside className="h-fit rounded-xl border border-ink/15 bg-white/80 p-4 lg:sticky lg:top-0">
+                    <h3 className="font-display text-xl text-ink">Calculation Preview</h3>
+                    <p className="mt-1 text-xs text-ink/70">Live estimate from current form input.</p>
+
+                    <div className="mt-3 space-y-2 rounded-lg border border-ink/10 bg-paper/70 p-3 text-xs text-ink/80">
+                      <p>
+                        Participants: <span className="font-mono">{form.selectedParticipants.length}</span>
+                      </p>
+                      <p>
+                        Payer: <span className="font-mono">{form.paidBy || '-'}</span>
+                      </p>
+                      <p>
+                        Tax: <span className="font-mono">{sanitizeNumber(form.taxPercent)}%</span>
+                      </p>
+                      <p>
+                        Discounts: <span className="font-mono">{normalizedFormDiscounts.length}</span>
+                      </p>
+                      <p>
+                        Extra fees: <span className="font-mono">{normalizedFormExtraFees.length}</span>
+                      </p>
+                    </div>
+
+                    {expensePreviewBreakdown.rows.length === 0 ? (
+                      <p className="mt-3 rounded-lg border border-dashed border-ink/20 bg-white px-3 py-2 text-xs text-ink/60">
+                        Select participants and payer to preview calculations.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="mt-3 max-h-56 overflow-auto rounded-lg border border-ink/10 bg-white">
+                          <table className="min-w-full border-collapse text-left text-xs">
+                            <thead>
+                              <tr className="border-b border-ink/10 text-ink/70">
+                                <th className="px-2 py-1.5 font-medium">Person</th>
+                                <th className="px-2 py-1.5 font-medium">Subtotal</th>
+                                <th className="px-2 py-1.5 font-medium">After Tax</th>
+                                <th className="px-2 py-1.5 font-medium">Final</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {expensePreviewBreakdown.rows.map((row) => (
+                                <tr key={`preview-${row.participant}`} className="border-b border-ink/10 last:border-b-0">
+                                  <td className="px-2 py-1.5">{row.participant}</td>
+                                  <td className="px-2 py-1.5 font-mono">{formatRupiah(row.subtotal)}</td>
+                                  <td className="px-2 py-1.5 font-mono">{formatRupiah(row.afterTax)}</td>
+                                  <td className="px-2 py-1.5 font-mono">{formatRupiah(row.finalAmount ?? row.afterTax)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="mt-3 rounded-lg border border-accent/30 bg-accent/10 p-3 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-ink/70">Subtotal</span>
+                            <span className="font-mono">{formatRupiah(expensePreviewTotals.subtotal)}</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <span className="text-ink/70">After tax total</span>
+                            <span className="font-mono">{formatRupiah(expensePreviewTotals.afterTax)}</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between border-t border-accent/30 pt-1.5">
+                            <span className="font-medium text-ink">Final owed total</span>
+                            <span className="font-mono font-medium">{formatRupiah(expensePreviewTotals.final)}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </aside>
+                </div>
+
                 {validationError && (
                   <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                     {validationError}
                   </p>
                 )}
 
-                <div className="flex flex-wrap justify-end gap-2 border-t border-ink/10 pt-3">
+                <div className="flex flex-wrap justify-end gap-2 border-t border-ink/10 pt-3 mt-3">
                   <button
                     type="button"
                     onClick={closeExpenseModal}
