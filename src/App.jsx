@@ -704,7 +704,7 @@ export default function App() {
                 onClick={resetAllContent}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 font-mono text-sm text-red-700 transition hover:-translate-y-0.5 hover:bg-red-100"
               >
-                <Trash2 size={16} /> Refresh Content
+                <Trash2 size={16} /> Reset Content
               </button>
               <button
                 type="button"
