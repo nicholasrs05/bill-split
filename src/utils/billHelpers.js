@@ -88,8 +88,12 @@ export function normalizeSharedItems(sharedItems, selectedParticipants) {
 }
 
 export function createDefaultForm() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+
   return {
     title: '',
+    expenseDateTime: local.toISOString().slice(0, 16),
     selectedParticipants: [],
     paidBy: '',
     taxPercent: 0,
@@ -100,6 +104,32 @@ export function createDefaultForm() {
     discounts: [],
     extraFees: [],
   };
+}
+
+export function getExpenseTimestamp(expense) {
+  const raw = expense?.expenseDateTime;
+  if (!raw) {
+    return 0;
+  }
+  const ts = new Date(raw).getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+export function formatExpenseDateTime(value) {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+  return date.toLocaleString('id-ID', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export function normalizeAdjustments(adjustments = []) {
@@ -290,7 +320,7 @@ export function computeDebts(expenses) {
 }
 
 export function buildExpenseSheetRows(expenses) {
-  const rows = [['#', 'Title', 'Paid By', 'Tax %', 'Person', 'Items', 'Subtotal', 'After Tax', 'Final Amount']];
+  const rows = [['#', 'Date Time', 'Title', 'Paid By', 'Tax %', 'Person', 'Items', 'Subtotal', 'After Tax', 'Final Amount']];
 
   expenses.forEach((expense, index) => {
     const tax = sanitizeNumber(expense.taxPercent);
@@ -308,6 +338,7 @@ export function buildExpenseSheetRows(expenses) {
         const finalAmount = computeFinalAmountAfterAdjustments(afterTax, participantCount, discounts, extraFees);
         rows.push([
           index + 1,
+          expense.expenseDateTime ?? '',
           expense.title,
           expense.paidBy,
           tax,
@@ -340,6 +371,7 @@ export function buildExpenseSheetRows(expenses) {
       }
       rows.push([
         index + 1,
+        expense.expenseDateTime ?? '',
         expense.title,
         expense.paidBy,
         tax,

@@ -20,7 +20,9 @@ import {
   computeSharedAllocations,
   createDefaultForm,
   createPersonEntries,
+  formatExpenseDateTime,
   formatRupiah,
+  getExpenseTimestamp,
   loadPersistedAppState,
   normalizeAdjustments,
   normalizeSharedItems,
@@ -42,9 +44,18 @@ export default function App() {
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
   const [participantToConfirmRemoval, setParticipantToConfirmRemoval] = useState(null);
   const [expenseToConfirmDeletion, setExpenseToConfirmDeletion] = useState(null);
+  const [expenseSortOrder, setExpenseSortOrder] = useState('desc');
 
   const { rawRows, netRows } = useMemo(() => computeDebts(expenses), [expenses]);
   const expenseSheetRows = useMemo(() => buildExpenseSheetRows(expenses), [expenses]);
+  const sortedExpenses = useMemo(() => {
+    const list = [...expenses];
+    list.sort((a, b) => {
+      const diff = getExpenseTimestamp(a) - getExpenseTimestamp(b);
+      return expenseSortOrder === 'asc' ? diff : -diff;
+    });
+    return list;
+  }, [expenses, expenseSortOrder]);
   const formSharedAllocations = useMemo(
     () => computeSharedAllocations(form.sharedItems ?? [], form.selectedParticipants ?? []),
     [form.sharedItems, form.selectedParticipants]
@@ -400,6 +411,7 @@ export default function App() {
 
     const errors = [];
     const title = form.title.trim();
+    const expenseDateTime = form.expenseDateTime;
     const paidBy = form.paidBy;
     const selectedParticipants = form.selectedParticipants.filter((participant) => participants.includes(participant));
     const taxPercent = Math.max(0, sanitizeNumber(form.taxPercent));
@@ -408,6 +420,10 @@ export default function App() {
 
     if (!title) {
       errors.push('Title is required.');
+    }
+
+    if (!expenseDateTime) {
+      errors.push('Date and time are required.');
     }
 
     if (selectedParticipants.length === 0) {
@@ -439,6 +455,7 @@ export default function App() {
       expensePayload = {
         id: editingExpenseId ?? crypto.randomUUID(),
         title,
+        expenseDateTime,
         paidBy,
         taxPercent,
         equalSplit: true,
@@ -493,6 +510,7 @@ export default function App() {
       expensePayload = {
         id: editingExpenseId ?? crypto.randomUUID(),
         title,
+        expenseDateTime,
         paidBy,
         taxPercent,
         equalSplit: false,
@@ -543,6 +561,7 @@ export default function App() {
 
     setForm({
       title: target.title,
+      expenseDateTime: target.expenseDateTime ?? createDefaultForm().expenseDateTime,
       selectedParticipants,
       paidBy,
       taxPercent: target.taxPercent,
@@ -774,13 +793,27 @@ export default function App() {
         <section className="rounded-2xl border border-ink/10 bg-white/80 p-5 shadow-ledger backdrop-blur">
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="font-display text-2xl">Expenses</h2>
-            <button
-              type="button"
-              onClick={openCreateExpenseModal}
-              className="inline-flex items-center gap-2 rounded-xl border border-accent/60 bg-accent px-3 py-2 font-mono text-xs text-ink"
-            >
-              <Plus size={14} /> Add Expense
-            </button>
+            <div className="flex items-center gap-2">
+              <label htmlFor="expenseSortOrder" className="text-xs text-ink/70">
+                Sort
+              </label>
+              <select
+                id="expenseSortOrder"
+                value={expenseSortOrder}
+                onChange={(event) => setExpenseSortOrder(event.target.value)}
+                className="rounded-lg border border-ink/20 bg-white px-2 py-1.5 text-xs outline-none ring-accent transition focus:ring"
+              >
+                <option value="desc">Newest first</option>
+                <option value="asc">Oldest first</option>
+              </select>
+              <button
+                type="button"
+                onClick={openCreateExpenseModal}
+                className="inline-flex items-center gap-2 rounded-xl border border-accent/60 bg-accent px-3 py-2 font-mono text-xs text-ink"
+              >
+                <Plus size={14} /> Add Expense
+              </button>
+            </div>
           </div>
 
           {expenses.length === 0 ? (
@@ -789,7 +822,7 @@ export default function App() {
             </p>
           ) : (
             <div className="space-y-3">
-              {expenses.map((expense) => {
+              {sortedExpenses.map((expense) => {
                 const breakdown = buildBreakdown(expense);
                 const expanded = Boolean(expandedExpenseIds[expense.id]);
                 return (
@@ -803,7 +836,8 @@ export default function App() {
                         <div>
                           <p className="font-medium text-ink">{expense.title}</p>
                           <p className="text-sm text-ink/65">
-                            paid by {expense.paidBy} | Total collected: {formatRupiah(breakdown.total)}
+                            {formatExpenseDateTime(expense.expenseDateTime)} | paid by {expense.paidBy} | Total collected:{' '}
+                            {formatRupiah(breakdown.total)}
                           </p>
                         </div>
                         {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
@@ -915,6 +949,19 @@ export default function App() {
                       className="w-full rounded-xl border border-ink/20 bg-white px-3 py-2 text-sm outline-none ring-accent transition focus:ring"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label htmlFor="expenseDateTime" className="mb-1 block text-sm font-medium text-ink/80">
+                    Date & Time
+                  </label>
+                  <input
+                    id="expenseDateTime"
+                    type="datetime-local"
+                    value={form.expenseDateTime ?? ''}
+                    onChange={(event) => setForm((prev) => ({ ...prev, expenseDateTime: event.target.value }))}
+                    className="w-full rounded-xl border border-ink/20 bg-white px-3 py-2 text-sm outline-none ring-accent transition focus:ring"
+                  />
                 </div>
 
                 <fieldset className="rounded-xl border border-ink/15 bg-paper/70 p-3">
