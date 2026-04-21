@@ -989,9 +989,9 @@ export default function App() {
         </section>
 
         <section className="rounded-2xl border border-ink/10 bg-white/80 p-5 shadow-ledger backdrop-blur">
-          <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-2xl">Expenses</h2>
-            <div className="flex items-center gap-2">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
               <label htmlFor="expenseSortOrder" className="text-xs text-ink/70">
                 Sort
               </label>
@@ -1007,7 +1007,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={openCreateExpenseModal}
-                className="inline-flex items-center gap-2 rounded-xl border border-accent/60 bg-accent px-3 py-2 font-mono text-xs text-ink"
+                className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl border border-accent/60 bg-accent px-3 py-2 font-mono text-xs text-ink"
               >
                 <Plus size={14} /> Add Expense
               </button>
