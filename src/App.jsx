@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Download,
+  Upload,
   Plus,
   Receipt,
   Trash2,
@@ -14,6 +15,7 @@ import ConfirmDialog from './components/ConfirmDialog';
 import { APP_STORAGE_KEY, initialParticipants } from './config/billConfig';
 import {
   buildBreakdown,
+  buildStructuredExportSheets,
   buildExpenseSheetRows,
   computeFinalAmountAfterAdjustments,
   computeDebts,
@@ -31,6 +33,7 @@ import {
 } from './utils/billHelpers';
 
 export default function App() {
+  const importInputRef = useRef(null);
   const persistedState = useMemo(() => loadPersistedAppState(), []);
   const [participants, setParticipants] = useState(persistedState.participants);
   const [expenses, setExpenses] = useState(persistedState.expenses);
@@ -603,21 +606,202 @@ export default function App() {
       return;
     }
 
-    const rawSheetRows = [['Debtor', 'Creditor', 'Expense Title', 'Amount']];
-    rawRows.forEach((row) => {
-      rawSheetRows.push([row.debtor, row.creditor, row.expenseTitle, row.amount]);
-    });
-
-    const netSheetRows = [['Debtor', 'Creditor', 'Net Amount']];
-    netRows.forEach((row) => {
-      netSheetRows.push([row.debtor, row.creditor, row.amount]);
-    });
-
+    const sheets = buildStructuredExportSheets(participants, expenses, rawRows, netRows, expenseSheetRows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expenseSheetRows), 'Expenses');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rawSheetRows), 'Raw Debts');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(netSheetRows), 'Net Debts');
+    sheets.forEach((sheet) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet.rows), sheet.name);
+    });
     XLSX.writeFile(wb, 'bill-split.xlsx');
+  };
+
+  const triggerImportExcel = () => {
+    importInputRef.current?.click();
+  };
+
+  const importExcel = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    let XLSX;
+    try {
+      XLSX = await import('xlsx');
+    } catch (error) {
+      setValidationError('Excel import module failed to load. Please refresh and try again.');
+      return;
+    }
+
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+
+      const getRows = (sheetName) => {
+        const sheet = wb.Sheets[sheetName];
+        if (!sheet) {
+          throw new Error(`Missing sheet: ${sheetName}`);
+        }
+        return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      };
+
+      const participantsRows = getRows('Participants');
+      const expensesRows = getRows('Expenses');
+      const expenseParticipantsRows = getRows('Expense Participants');
+      const entriesRows = getRows('Entries');
+      const sharedItemsRows = getRows('Shared Items');
+      const sharedItemWeightsRows = getRows('Shared Item Weights');
+      const adjustmentsRows = getRows('Adjustments');
+
+      const participantSet = new Set(
+        participantsRows
+          .map((row) => String(row.Name ?? '').trim())
+          .filter((name) => name.length > 0)
+      );
+
+      const selectedParticipantsByExpense = new Map();
+      expenseParticipantsRows.forEach((row) => {
+        const expenseId = String(row['Expense ID'] ?? '').trim();
+        const participant = String(row.Participant ?? '').trim();
+        if (!expenseId || !participant) {
+          return;
+        }
+        if (!selectedParticipantsByExpense.has(expenseId)) {
+          selectedParticipantsByExpense.set(expenseId, []);
+        }
+        selectedParticipantsByExpense.get(expenseId).push(participant);
+        participantSet.add(participant);
+      });
+
+      const entriesByExpense = new Map();
+      entriesRows.forEach((row) => {
+        const expenseId = String(row['Expense ID'] ?? '').trim();
+        const participant = String(row.Participant ?? '').trim();
+        if (!expenseId || !participant) {
+          return;
+        }
+        let items = [];
+        try {
+          const parsed = JSON.parse(String(row['Items JSON'] ?? '[]'));
+          if (Array.isArray(parsed)) {
+            items = parsed.map((item) => Math.max(0, Math.round(sanitizeNumber(item)))).filter((item) => item > 0);
+          }
+        } catch (error) {
+          items = [];
+        }
+
+        if (!entriesByExpense.has(expenseId)) {
+          entriesByExpense.set(expenseId, []);
+        }
+        entriesByExpense.get(expenseId).push({ participant, items });
+        participantSet.add(participant);
+      });
+
+      const sharedItemWeightsByItem = new Map();
+      sharedItemWeightsRows.forEach((row) => {
+        const sharedItemId = String(row['Shared Item ID'] ?? '').trim();
+        const participant = String(row.Participant ?? '').trim();
+        if (!sharedItemId || !participant) {
+          return;
+        }
+        if (!sharedItemWeightsByItem.has(sharedItemId)) {
+          sharedItemWeightsByItem.set(sharedItemId, {});
+        }
+        sharedItemWeightsByItem.get(sharedItemId)[participant] = Math.max(0, sanitizeNumber(row.Weight));
+        participantSet.add(participant);
+      });
+
+      const sharedItemsByExpense = new Map();
+      sharedItemsRows.forEach((row) => {
+        const sharedItemId = String(row['Shared Item ID'] ?? '').trim();
+        const expenseId = String(row['Expense ID'] ?? '').trim();
+        if (!sharedItemId || !expenseId) {
+          return;
+        }
+        if (!sharedItemsByExpense.has(expenseId)) {
+          sharedItemsByExpense.set(expenseId, []);
+        }
+        sharedItemsByExpense.get(expenseId).push({
+          id: sharedItemId,
+          label: String(row.Label ?? '').trim(),
+          amount: Math.max(0, Math.round(sanitizeNumber(row.Amount))),
+          weights: sharedItemWeightsByItem.get(sharedItemId) ?? {},
+        });
+      });
+
+      const adjustmentsByExpense = new Map();
+      adjustmentsRows.forEach((row) => {
+        const expenseId = String(row['Expense ID'] ?? '').trim();
+        if (!expenseId) {
+          return;
+        }
+        if (!adjustmentsByExpense.has(expenseId)) {
+          adjustmentsByExpense.set(expenseId, { discounts: [], extraFees: [] });
+        }
+
+        const item = {
+          id: String(row['Adjustment ID'] ?? '').trim() || crypto.randomUUID(),
+          label: String(row.Label ?? '').trim(),
+          mode: String(row.Mode ?? '').trim() === 'percent' ? 'percent' : 'nominal',
+          value: Math.max(0, sanitizeNumber(row.Value)),
+        };
+
+        const kind = String(row.Kind ?? '').trim();
+        if (kind === 'discount') {
+          adjustmentsByExpense.get(expenseId).discounts.push(item);
+        } else if (kind === 'extraFee') {
+          adjustmentsByExpense.get(expenseId).extraFees.push(item);
+        }
+      });
+
+      const importedExpenses = expensesRows
+        .map((row) => {
+          const expenseId = String(row['Expense ID'] ?? '').trim() || crypto.randomUUID();
+          const selectedParticipants = [...new Set(selectedParticipantsByExpense.get(expenseId) ?? [])];
+          const paidBy = String(row['Paid By'] ?? '').trim();
+          if (paidBy) {
+            participantSet.add(paidBy);
+          }
+
+          const adjustments = adjustmentsByExpense.get(expenseId) ?? { discounts: [], extraFees: [] };
+          return {
+            id: expenseId,
+            expenseDateTime: String(row['Date Time'] ?? '').trim(),
+            title: String(row.Title ?? '').trim(),
+            paidBy,
+            taxPercent: Math.max(0, sanitizeNumber(row['Tax %'])),
+            equalSplit:
+              sanitizeNumber(row['Equal Split']) === 1 ||
+              String(row['Equal Split'] ?? '').trim().toLowerCase() === 'true',
+            equalSplitTotal: Math.max(0, sanitizeNumber(row['Equal Split Total'])),
+            selectedParticipants,
+            includedParticipants: selectedParticipants,
+            entries: entriesByExpense.get(expenseId) ?? [],
+            sharedItems: sharedItemsByExpense.get(expenseId) ?? [],
+            discounts: normalizeAdjustments(adjustments.discounts),
+            extraFees: normalizeAdjustments(adjustments.extraFees),
+          };
+        })
+        .filter((expense) => expense.title && expense.paidBy);
+
+      if (participantSet.size === 0 && importedExpenses.length === 0) {
+        throw new Error('No usable data found in file');
+      }
+
+      const importedParticipants = [...participantSet];
+      setParticipants(importedParticipants.length > 0 ? importedParticipants : initialParticipants);
+      setExpenses(importedExpenses);
+      setExpandedExpenseIds({});
+      setShowRawDebts(true);
+      setParticipantInput('');
+      setForm(createDefaultForm());
+      setEditingExpenseId(null);
+      setIsExpenseModalOpen(false);
+      setValidationError('');
+    } catch (error) {
+      setValidationError('Import failed. Please use a file generated by this app export format.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const resetAllContent = () => {
@@ -718,12 +902,26 @@ export default function App() {
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={importExcel}
+                className="hidden"
+              />
               <button
                 type="button"
                 onClick={resetAllContent}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 font-mono text-sm text-red-700 transition hover:-translate-y-0.5 hover:bg-red-100"
               >
                 <Trash2 size={16} /> Reset Content
+              </button>
+              <button
+                type="button"
+                onClick={triggerImportExcel}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-ink/20 bg-white px-4 py-2 font-mono text-sm text-ink transition hover:-translate-y-0.5 hover:bg-ink/5"
+              >
+                <Upload size={16} /> Import Excel
               </button>
               <button
                 type="button"

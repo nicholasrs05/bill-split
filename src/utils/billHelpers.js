@@ -386,3 +386,95 @@ export function buildExpenseSheetRows(expenses) {
 
   return rows;
 }
+
+export function buildStructuredExportSheets(participants, expenses, rawRows, netRows, expenseSheetRows) {
+  const participantsRows = [['Name'], ...participants.map((name) => [name])];
+
+  const expensesRows = [
+    ['Expense ID', 'Date Time', 'Title', 'Paid By', 'Tax %', 'Equal Split', 'Equal Split Total'],
+    ...expenses.map((expense) => [
+      expense.id,
+      expense.expenseDateTime ?? '',
+      expense.title,
+      expense.paidBy,
+      sanitizeNumber(expense.taxPercent),
+      expense.equalSplit ? 1 : 0,
+      sanitizeNumber(expense.equalSplitTotal),
+    ]),
+  ];
+
+  const expenseParticipantsRows = [
+    ['Expense ID', 'Participant'],
+    ...expenses.flatMap((expense) =>
+      (expense.selectedParticipants ?? expense.includedParticipants ?? []).map((participant) => [expense.id, participant])
+    ),
+  ];
+
+  const entriesRows = [
+    ['Expense ID', 'Participant', 'Items JSON'],
+    ...expenses.flatMap((expense) =>
+      (expense.entries ?? []).map((entry) => [expense.id, entry.participant, JSON.stringify(entry.items ?? [])])
+    ),
+  ];
+
+  const sharedItemsRows = [
+    ['Shared Item ID', 'Expense ID', 'Label', 'Amount'],
+    ...expenses.flatMap((expense) =>
+      (expense.sharedItems ?? []).map((item) => [item.id, expense.id, item.label ?? '', sanitizeNumber(item.amount)])
+    ),
+  ];
+
+  const sharedItemWeightsRows = [
+    ['Shared Item ID', 'Participant', 'Weight'],
+    ...expenses.flatMap((expense) =>
+      (expense.sharedItems ?? []).flatMap((item) =>
+        Object.entries(item.weights ?? {}).map(([participant, weight]) => [item.id, participant, sanitizeNumber(weight)])
+      )
+    ),
+  ];
+
+  const adjustmentsRows = [
+    ['Adjustment ID', 'Expense ID', 'Kind', 'Label', 'Mode', 'Value'],
+    ...expenses.flatMap((expense) => [
+      ...normalizeAdjustments(expense.discounts ?? []).map((item) => [
+        item.id,
+        expense.id,
+        'discount',
+        item.label ?? '',
+        item.mode,
+        sanitizeNumber(item.value),
+      ]),
+      ...normalizeAdjustments(expense.extraFees ?? []).map((item) => [
+        item.id,
+        expense.id,
+        'extraFee',
+        item.label ?? '',
+        item.mode,
+        sanitizeNumber(item.value),
+      ]),
+    ]),
+  ];
+
+  const rawRowsSheet = [
+    ['Debtor', 'Creditor', 'Expense Title', 'Amount'],
+    ...rawRows.map((row) => [row.debtor, row.creditor, row.expenseTitle, sanitizeNumber(row.amount)]),
+  ];
+
+  const netRowsSheet = [
+    ['Debtor', 'Creditor', 'Net Amount'],
+    ...netRows.map((row) => [row.debtor, row.creditor, sanitizeNumber(row.amount)]),
+  ];
+
+  return [
+    { name: 'Expense Rows', rows: expenseSheetRows },
+    { name: 'Participants', rows: participantsRows },
+    { name: 'Expenses', rows: expensesRows },
+    { name: 'Expense Participants', rows: expenseParticipantsRows },
+    { name: 'Entries', rows: entriesRows },
+    { name: 'Shared Items', rows: sharedItemsRows },
+    { name: 'Shared Item Weights', rows: sharedItemWeightsRows },
+    { name: 'Adjustments', rows: adjustmentsRows },
+    { name: 'Raw Debts', rows: rawRowsSheet },
+    { name: 'Net Debts', rows: netRowsSheet },
+  ];
+}
