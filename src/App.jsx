@@ -7,14 +7,17 @@ import {
   Trash2,
   Users,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   PencilLine,
+  Share2,
   X,
 } from 'lucide-react';
 import ConfirmDialog from './components/ConfirmDialog';
 import { APP_STORAGE_KEY, initialParticipants } from './config/billConfig';
 import {
   buildBreakdown,
+  buildNetDebtCalculationDetails,
   buildStructuredExportSheets,
   buildExpenseSheetRows,
   computeFinalAmountAfterAdjustments,
@@ -48,6 +51,10 @@ export default function App() {
   const [participantToConfirmRemoval, setParticipantToConfirmRemoval] = useState(null);
   const [expenseToConfirmDeletion, setExpenseToConfirmDeletion] = useState(null);
   const [expenseSortOrder, setExpenseSortOrder] = useState('desc');
+  const [selectedNetDebtRow, setSelectedNetDebtRow] = useState(null);
+  const [isSharingNetDebtDetail, setIsSharingNetDebtDetail] = useState(false);
+  const [netDebtShareFeedback, setNetDebtShareFeedback] = useState('');
+  const netDebtDetailCaptureRef = useRef(null);
 
   const { rawRows, netRows } = useMemo(() => computeDebts(expenses), [expenses]);
   const expenseSheetRows = useMemo(() => buildExpenseSheetRows(expenses), [expenses]);
@@ -132,6 +139,12 @@ export default function App() {
     }),
     [expensePreviewBreakdown]
   );
+  const netDebtDetail = useMemo(() => {
+    if (!selectedNetDebtRow) {
+      return null;
+    }
+    return buildNetDebtCalculationDetails(expenses, selectedNetDebtRow.debtor, selectedNetDebtRow.creditor);
+  }, [selectedNetDebtRow, expenses]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -852,28 +865,99 @@ export default function App() {
     setExpenseToConfirmDeletion(null);
   };
 
+  const openNetDebtDetail = (row) => {
+    setNetDebtShareFeedback('');
+    setSelectedNetDebtRow(row);
+  };
+
+  const closeNetDebtDetail = () => {
+    setNetDebtShareFeedback('');
+    setSelectedNetDebtRow(null);
+  };
+
+  const shareNetDebtDetailImage = async () => {
+    if (!netDebtDetailCaptureRef.current || !selectedNetDebtRow || isSharingNetDebtDetail) {
+      return;
+    }
+
+    setIsSharingNetDebtDetail(true);
+    setNetDebtShareFeedback('');
+
+    try {
+      const { toBlob } = await import('html-to-image');
+      const blob = await toBlob(netDebtDetailCaptureRef.current, {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: '#FAF7F2',
+        filter: (node) => !(node instanceof Element && node.dataset?.shareExclude === 'true'),
+      });
+
+      if (!blob) {
+        throw new Error('Capture failed');
+      }
+
+      const safeDebtor = selectedNetDebtRow.debtor.replace(/[^a-zA-Z0-9-_]/g, '-');
+      const safeCreditor = selectedNetDebtRow.creditor.replace(/[^a-zA-Z0-9-_]/g, '-');
+      const fileName = `debt-proof-${safeDebtor}-to-${safeCreditor}.png`;
+      const file = new File([blob], fileName, { type: 'image/png' });
+
+      if (
+        typeof navigator !== 'undefined' &&
+        typeof navigator.share === 'function' &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({ files: [file] })
+      ) {
+        await navigator.share({
+          title: `Debt proof: ${selectedNetDebtRow.debtor} to ${selectedNetDebtRow.creditor}`,
+          // text: `${selectedNetDebtRow.debtor} owes ${selectedNetDebtRow.creditor} ${formatRupiah(selectedNetDebtRow.amount)}`,
+          // text: `Bayar utang`,
+          files: [file],
+        });
+        setNetDebtShareFeedback('Shared successfully.');
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      setNetDebtShareFeedback('Direct share is not supported here. Image downloaded so you can send it manually.');
+    } catch (error) {
+      setNetDebtShareFeedback('Failed to generate share image. Please try again.');
+    } finally {
+      setIsSharingNetDebtDetail(false);
+    }
+  };
+
   return (
     <div className="min-h-screen paper-noise px-4 py-6 sm:px-6 lg:px-8">
       <style>{`
-        .paper-noise {
-          background-color: #FAF7F2;
-          background-image:
-            radial-gradient(circle at 15% 20%, rgba(245, 158, 11, 0.08) 0 18%, transparent 19%),
-            radial-gradient(circle at 80% 10%, rgba(26, 26, 46, 0.06) 0 22%, transparent 23%),
-            radial-gradient(circle at 40% 80%, rgba(245, 158, 11, 0.05) 0 16%, transparent 17%),
-            linear-gradient(120deg, rgba(255, 255, 255, 0.65), rgba(250, 247, 242, 0.95));
-          position: relative;
-        }
+        // .paper-noise {
+        //   background-color: #FAF7F2;
+        //   background-image:
+        //     linear-gradient(120deg, rgba(255, 255, 255, 0.65), rgba(250, 247, 242, 0.95)),
+        //     radial-gradient(circle at 16% 22%, rgba(245, 158, 11, 0.08) 0 18%, transparent 19%),
+        //     radial-gradient(circle at 82% 14%, rgba(26, 26, 46, 0.06) 0 22%, transparent 23%),
+        //     radial-gradient(circle at 42% 78%, rgba(245, 158, 11, 0.05) 0 16%, transparent 17%);
+        //   background-size: 100% 100%, 520px 520px, 620px 620px, 460px 460px;
+        //   background-position: 0 0, 0 0, 240px 120px, 120px 260px;
+        //   background-repeat: no-repeat, repeat, repeat, repeat;
+        //   position: relative;
+        // }
 
-        .paper-noise::before {
-          content: '';
-          position: fixed;
-          inset: 0;
-          pointer-events: none;
-          opacity: 0.12;
-          background-image: radial-gradient(rgba(26, 26, 46, 0.22) 0.35px, transparent 0.35px);
-          background-size: 3px 3px;
-        }
+        // .paper-noise::before {
+        //   content: '';
+        //   position: fixed;
+        //   inset: 0;
+        //   pointer-events: none;
+        //   opacity: 0.12;
+        //   background-image: radial-gradient(rgba(26, 26, 46, 0.22) 0.35px, transparent 0.35px);
+        //   background-size: 3px 3px;
+        // }
 
         .fade-in {
           animation: fade-in 220ms ease-out;
@@ -1024,12 +1108,15 @@ export default function App() {
                 const breakdown = buildBreakdown(expense);
                 const expanded = Boolean(expandedExpenseIds[expense.id]);
                 return (
-                  <article key={expense.id} className="fade-in rounded-xl border border-ink/15 bg-white p-4">
+                  <article
+                    key={expense.id}
+                    className="fade-in rounded-xl border border-ink/15 bg-white p-4 transition-colors duration-200 hover:border-accent/40 hover:bg-accent/[0.06]"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <button
                         type="button"
                         onClick={() => toggleExpenseExpanded(expense.id)}
-                        className="flex flex-1 items-center justify-between gap-3 text-left"
+                        className="flex flex-1 items-center justify-between gap-3 rounded-lg px-2 py-1 text-left transition-colors duration-200 hover:bg-accent/[0.06]"
                       >
                         <div>
                           <p className="font-medium text-ink">{expense.title}</p>
@@ -1038,7 +1125,10 @@ export default function App() {
                             {formatRupiah(breakdown.total)}
                           </p>
                         </div>
-                        {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                        <ChevronDown
+                          size={18}
+                          className={`transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`}
+                        />
                       </button>
 
                       <div className="flex items-center gap-2">
@@ -1059,30 +1149,36 @@ export default function App() {
                       </div>
                     </div>
 
-                    {expanded && (
-                      <div className="mt-3 overflow-x-auto">
-                        <table className="min-w-full border-collapse text-left text-sm">
-                          <thead>
-                            <tr className="border-b border-ink/15 text-ink/70">
-                              <th className="px-2 py-2 font-medium">Person</th>
-                              <th className="px-2 py-2 font-medium">Subtotal</th>
-                              <th className="px-2 py-2 font-medium">After Tax</th>
-                              <th className="px-2 py-2 font-medium">Final</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {breakdown.rows.map((row) => (
-                              <tr key={`${expense.id}-${row.participant}`} className="border-b border-ink/10">
-                                <td className="px-2 py-2">{row.participant}</td>
-                                <td className="px-2 py-2 font-mono">{formatRupiah(row.subtotal)}</td>
-                                <td className="px-2 py-2 font-mono">{formatRupiah(row.afterTax)}</td>
-                                <td className="px-2 py-2 font-mono">{formatRupiah(row.finalAmount)}</td>
+                    <div
+                      className={`grid transition-all duration-300 ease-out ${
+                        expanded ? 'mt-3 grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                      }`}
+                    >
+                      <div className="overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full border-collapse text-left text-sm">
+                            <thead>
+                              <tr className="border-b border-ink/15 text-ink/70">
+                                <th className="px-2 py-2 font-medium">Person</th>
+                                <th className="px-2 py-2 font-medium">Subtotal</th>
+                                <th className="px-2 py-2 font-medium">After Tax</th>
+                                <th className="px-2 py-2 font-medium">Final</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {breakdown.rows.map((row) => (
+                                <tr key={`${expense.id}-${row.participant}`} className="border-b border-ink/10">
+                                  <td className="px-2 py-2">{row.participant}</td>
+                                  <td className="px-2 py-2 font-mono">{formatRupiah(row.subtotal)}</td>
+                                  <td className="px-2 py-2 font-mono">{formatRupiah(row.afterTax)}</td>
+                                  <td className="px-2 py-2 font-mono">{formatRupiah(row.finalAmount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    )}
+                    </div>
                   </article>
                 );
               })}
@@ -1650,6 +1746,156 @@ export default function App() {
           ariaLabel="Close expense deletion confirmation dialog"
         />
 
+        {selectedNetDebtRow && netDebtDetail && (
+          <div className="fixed inset-0 z-[60] flex items-start justify-center p-4 sm:items-center">
+            <button
+              type="button"
+              className="absolute inset-0 bg-ink/45 backdrop-blur-[1px]"
+              onClick={closeNetDebtDetail}
+              aria-label="Close net debt detail dialog"
+            />
+
+            <div
+              ref={netDebtDetailCaptureRef}
+              className="relative z-10 w-full max-w-5xl rounded-2xl border border-ink/15 bg-white p-5 shadow-2xl"
+            >
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-2xl text-ink">Net Debt Calculation Detail</h3>
+                  <p className="text-sm text-ink/70">
+                    {selectedNetDebtRow.debtor} owes {selectedNetDebtRow.creditor} {formatRupiah(selectedNetDebtRow.amount)}
+                  </p>
+                </div>
+                <div data-share-exclude="true" className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={shareNetDebtDetailImage}
+                    disabled={isSharingNetDebtDetail}
+                    className="inline-flex items-center gap-1 rounded-lg border border-accent/50 bg-accent/10 px-2.5 py-1.5 text-xs text-ink transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Share2 size={14} /> {isSharingNetDebtDetail ? 'Preparing...' : 'Share Proof'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeNetDebtDetail}
+                    className="rounded-lg border border-ink/20 p-1.5 text-ink/70 transition hover:bg-ink/5"
+                    aria-label="Close"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {netDebtShareFeedback && (
+                <p className="mb-3 rounded-lg border border-ink/10 bg-paper px-3 py-2 text-xs text-ink/75">{netDebtShareFeedback}</p>
+              )}
+
+              <div className="max-h-[76vh] space-y-4 overflow-y-auto pr-1">
+                <section className="rounded-xl border border-ink/15 bg-white p-3">
+                  <h4 className="mb-2 font-medium text-ink">1. Expense Details</h4>
+                  {netDebtDetail.expenseDetails.length === 0 ? (
+                    <p className="text-sm text-ink/60">No matching expense details found.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full border-collapse text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-ink/15 text-ink/70">
+                            <th className="px-2 py-2 font-medium">Date</th>
+                            <th className="px-2 py-2 font-medium">Expense</th>
+                            <th className="px-2 py-2 font-medium">Direction</th>
+                            <th className="px-2 py-2 font-medium">Subtotal</th>
+                            <th className="px-2 py-2 font-medium">Tax %</th>
+                            <th className="px-2 py-2 font-medium">After Tax</th>
+                            <th className="px-2 py-2 font-medium">Discounts</th>
+                            <th className="px-2 py-2 font-medium">Extra Fees</th>
+                            <th className="px-2 py-2 font-medium">Final</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {netDebtDetail.expenseDetails.map((detail) => (
+                            <tr
+                              key={`${detail.expenseId}-${detail.participant}-${detail.direction}`}
+                              className="border-b border-ink/10 last:border-b-0"
+                            >
+                              <td className="px-2 py-2">{formatExpenseDateTime(detail.expenseDateTime)}</td>
+                              <td className="px-2 py-2">{detail.expenseTitle}</td>
+                              <td className="px-2 py-2">{detail.direction}</td>
+                              <td className="px-2 py-2 font-mono">{formatRupiah(detail.subtotal)}</td>
+                              <td className="px-2 py-2 font-mono">{detail.taxPercent}%</td>
+                              <td className="px-2 py-2 font-mono">{formatRupiah(detail.afterTax)}</td>
+                              <td className="px-2 py-2 font-mono">- {formatRupiah(detail.discountImpact)}</td>
+                              <td className="px-2 py-2 font-mono">+ {formatRupiah(detail.extraFeeImpact)}</td>
+                              <td className="px-2 py-2 font-mono">{formatRupiah(detail.finalAmount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+
+                <section className="rounded-xl border border-ink/15 bg-white p-3">
+                  <h4 className="mb-2 font-medium text-ink">2. Raw Debts</h4>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border border-ink/10 bg-paper/70 p-3">
+                      <p className="mb-2 text-sm font-medium">
+                        {selectedNetDebtRow.debtor} owes {selectedNetDebtRow.creditor}
+                      </p>
+                      {netDebtDetail.rawDebtsDebtorToCreditor.length === 0 ? (
+                        <p className="text-xs text-ink/60">No entries.</p>
+                      ) : (
+                        <ul className="space-y-1 text-xs">
+                          {netDebtDetail.rawDebtsDebtorToCreditor.map((detail) => (
+                            <li key={`raw-a-${detail.expenseId}-${detail.participant}`} className="flex justify-between gap-2">
+                              <span>{detail.expenseTitle}</span>
+                              <span className="font-mono">{formatRupiah(detail.finalAmount)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="mt-2 border-t border-ink/10 pt-2 text-sm font-medium">
+                        Total: <span className="font-mono">{formatRupiah(netDebtDetail.totalDebtorToCreditor)}</span>
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-ink/10 bg-paper/70 p-3">
+                      <p className="mb-2 text-sm font-medium">
+                        {selectedNetDebtRow.creditor} owes {selectedNetDebtRow.debtor}
+                      </p>
+                      {netDebtDetail.rawDebtsCreditorToDebtor.length === 0 ? (
+                        <p className="text-xs text-ink/60">No entries.</p>
+                      ) : (
+                        <ul className="space-y-1 text-xs">
+                          {netDebtDetail.rawDebtsCreditorToDebtor.map((detail) => (
+                            <li key={`raw-b-${detail.expenseId}-${detail.participant}`} className="flex justify-between gap-2">
+                              <span>{detail.expenseTitle}</span>
+                              <span className="font-mono">{formatRupiah(detail.finalAmount)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="mt-2 border-t border-ink/10 pt-2 text-sm font-medium">
+                        Total: <span className="font-mono">{formatRupiah(netDebtDetail.totalCreditorToDebtor)}</span>
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-accent/30 bg-accent/10 p-3">
+                  <h4 className="mb-2 font-medium text-ink">3. Final Debt</h4>
+                  <p className="text-sm text-ink/80">
+                    {selectedNetDebtRow.debtor} owes {selectedNetDebtRow.creditor}
+                  </p>
+                  <p className="mt-1 font-mono text-lg font-medium text-ink">{formatRupiah(netDebtDetail.finalNetAmount)}</p>
+                  <p className="mt-1 text-xs text-ink/70">
+                    Formula: {formatRupiah(netDebtDetail.totalDebtorToCreditor)} - {formatRupiah(netDebtDetail.totalCreditorToDebtor)}
+                  </p>
+                </section>
+              </div>
+            </div>
+          </div>
+        )}
+
         <section className="rounded-2xl border border-ink/10 bg-white/85 p-5 shadow-ledger backdrop-blur">
           <div className="flex items-center justify-between">
             <h2 className="font-display text-2xl">Summary</h2>
@@ -1658,67 +1904,95 @@ export default function App() {
               onClick={() => setShowRawDebts((prev) => !prev)}
               className="inline-flex items-center gap-1 rounded-lg border border-ink/20 px-3 py-1.5 text-xs"
             >
-              {showRawDebts ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              <ChevronDown size={14} className={`transition-transform duration-300 ${showRawDebts ? 'rotate-180' : ''}`} />
               Raw Debts
             </button>
           </div>
 
-          {showRawDebts && (
-            <div className="mt-4 overflow-x-auto">
-              <h3 className="mb-2 font-medium text-ink/80">Raw Debts</h3>
-              <table className="min-w-full border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-ink/15 text-ink/70">
-                    <th className="px-2 py-2 font-medium">Debtor</th>
-                    <th className="px-2 py-2 font-medium">Creditor</th>
-                    <th className="px-2 py-2 font-medium">Expense</th>
-                    <th className="px-2 py-2 font-medium">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rawRows.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-2 py-4 text-ink/60">
-                        No raw debts yet.
-                      </td>
+          <div
+            className={`grid transition-all duration-300 ease-out ${
+              showRawDebts ? 'mt-4 grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+            }`}
+          >
+            <div className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <h3 className="mb-2 font-medium text-ink/80">Raw Debts</h3>
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-ink/15 text-ink/70">
+                      <th className="px-2 py-2 font-medium">Debtor</th>
+                      <th className="px-2 py-2 font-medium">Creditor</th>
+                      <th className="px-2 py-2 font-medium">Expense</th>
+                      <th className="px-2 py-2 font-medium">Amount</th>
                     </tr>
-                  )}
-                  {rawRows.map((row, index) => (
-                    <tr key={`${row.debtor}-${row.creditor}-${row.expenseTitle}-${index}`} className="border-b border-ink/10">
-                      <td className="px-2 py-2">{row.debtor}</td>
-                      <td className="px-2 py-2">{row.creditor}</td>
-                      <td className="px-2 py-2">{row.expenseTitle}</td>
-                      <td className="px-2 py-2 font-mono">{formatRupiah(row.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {rawRows.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-2 py-4 text-ink/60">
+                          No raw debts yet.
+                        </td>
+                      </tr>
+                    )}
+                    {rawRows.map((row, index) => (
+                      <tr key={`${row.debtor}-${row.creditor}-${row.expenseTitle}-${index}`} className="border-b border-ink/10">
+                        <td className="px-2 py-2">{row.debtor}</td>
+                        <td className="px-2 py-2">{row.creditor}</td>
+                        <td className="px-2 py-2">{row.expenseTitle}</td>
+                        <td className="px-2 py-2 font-mono">{formatRupiah(row.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          )}
+          </div>
 
           <div className="mt-5 overflow-x-auto rounded-xl border border-accent/30 bg-accent/10 p-3">
-            <h3 className="mb-2 font-medium text-ink">Net Debts</h3>
+            <h3 className="mb-1 font-medium text-ink">Net Debts</h3>
+            <p className="mb-1 max-w-2xl text-sm text-ink/70">
+              Click row to see details and share.
+            </p>
             <table className="min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-ink/15 text-ink/70">
                   <th className="px-2 py-2 font-medium">Person</th>
                   <th className="px-2 py-2 font-medium">Owes</th>
                   <th className="px-2 py-2 font-medium">Amount</th>
+                  <th className="px-2 py-2 font-medium">Details</th>
                 </tr>
               </thead>
               <tbody>
                 {netRows.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="px-2 py-4 text-ink/70">
+                    <td colSpan={4} className="px-2 py-4 text-ink/70">
                       No net debts yet.
                     </td>
                   </tr>
                 )}
                 {netRows.map((row) => (
-                  <tr key={`${row.debtor}-${row.creditor}`} className="border-b border-ink/10">
+                  <tr
+                    key={`${row.debtor}-${row.creditor}`}
+                    className="group cursor-pointer border-b border-ink/10 transition hover:bg-white/75 hover:shadow-[inset_0_0_0_1px_rgba(245,158,11,0.35)]"
+                    onClick={() => openNetDebtDetail(row)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openNetDebtDetail(row);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`View net debt detail for ${row.debtor} owing ${row.creditor}`}
+                  >
                     <td className="px-2 py-2">{row.debtor}</td>
                     <td className="px-2 py-2">{row.creditor}</td>
                     <td className="px-2 py-2 font-mono">{formatRupiah(row.amount)}</td>
+                    <td className="px-2 py-2">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-xs text-ink transition group-hover:bg-accent/25">
+                        View details <ChevronRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -144,6 +144,11 @@ export function normalizeAdjustments(adjustments = []) {
 }
 
 export function computeFinalAmountAfterAdjustments(afterTaxAmount, participantCount, discounts = [], extraFees = []) {
+  const breakdown = computeAdjustmentBreakdown(afterTaxAmount, participantCount, discounts, extraFees);
+  return breakdown.finalAmount;
+}
+
+export function computeAdjustmentBreakdown(afterTaxAmount, participantCount, discounts = [], extraFees = []) {
   const base = Math.max(0, sanitizeNumber(afterTaxAmount));
   const count = Math.max(1, sanitizeNumber(participantCount));
 
@@ -161,7 +166,13 @@ export function computeFinalAmountAfterAdjustments(afterTaxAmount, participantCo
     return sum + item.value / count;
   }, 0);
 
-  return Math.max(0, Math.round(base - totalDiscount + totalExtraFee));
+  const finalAmount = Math.max(0, Math.round(base - totalDiscount + totalExtraFee));
+  return {
+    baseAfterTax: base,
+    discountImpact: Math.round(totalDiscount),
+    extraFeeImpact: Math.round(totalExtraFee),
+    finalAmount,
+  };
 }
 
 export function computeSharedAllocations(sharedItems, selectedParticipants) {
@@ -216,12 +227,17 @@ export function buildBreakdown(expense) {
 
     const rows = included
       .filter((participant) => participant !== expense.paidBy)
-      .map((participant) => ({
-        participant,
-        subtotal: Math.round(shareBeforeTax),
-        afterTax: shareAfterTax,
-        finalAmount: computeFinalAmountAfterAdjustments(shareAfterTax, participantCount, discounts, extraFees),
-      }));
+      .map((participant) => {
+        const adjustment = computeAdjustmentBreakdown(shareAfterTax, participantCount, discounts, extraFees);
+        return {
+          participant,
+          subtotal: Math.round(shareBeforeTax),
+          afterTax: shareAfterTax,
+          discountImpact: adjustment.discountImpact,
+          extraFeeImpact: adjustment.extraFeeImpact,
+          finalAmount: adjustment.finalAmount,
+        };
+      });
 
     return {
       rows,
@@ -241,12 +257,14 @@ export function buildBreakdown(expense) {
       const sharedSubtotal = Math.round(sharedAllocations[participant] ?? 0);
       const subtotal = ownSubtotal + sharedSubtotal;
       const afterTax = Math.round(subtotal * taxFactor);
-      const finalAmount = computeFinalAmountAfterAdjustments(afterTax, participantCount, discounts, extraFees);
+      const adjustment = computeAdjustmentBreakdown(afterTax, participantCount, discounts, extraFees);
       return {
         participant,
         subtotal,
         afterTax,
-        finalAmount,
+        discountImpact: adjustment.discountImpact,
+        extraFeeImpact: adjustment.extraFeeImpact,
+        finalAmount: adjustment.finalAmount,
       };
     })
     .filter((row) => row.finalAmount > 0);
@@ -477,4 +495,56 @@ export function buildStructuredExportSheets(participants, expenses, rawRows, net
     { name: 'Raw Debts', rows: rawRowsSheet },
     { name: 'Net Debts', rows: netRowsSheet },
   ];
+}
+
+export function buildNetDebtCalculationDetails(expenses, debtor, creditor) {
+  const expenseDetails = [];
+  const rawDebtsDebtorToCreditor = [];
+  const rawDebtsCreditorToDebtor = [];
+
+  expenses.forEach((expense) => {
+    const breakdown = buildBreakdown(expense);
+    breakdown.rows.forEach((row) => {
+      const detail = {
+        expenseId: expense.id,
+        expenseTitle: expense.title,
+        expenseDateTime: expense.expenseDateTime ?? '',
+        paidBy: expense.paidBy,
+        participant: row.participant,
+        taxPercent: sanitizeNumber(expense.taxPercent),
+        subtotal: Math.round(row.subtotal ?? 0),
+        afterTax: Math.round(row.afterTax ?? 0),
+        discountImpact: Math.round(row.discountImpact ?? 0),
+        extraFeeImpact: Math.round(row.extraFeeImpact ?? 0),
+        finalAmount: Math.round(row.finalAmount ?? row.afterTax ?? 0),
+      };
+
+      if (row.participant === debtor && expense.paidBy === creditor) {
+        const traced = { ...detail, direction: `${debtor} → ${creditor}` };
+        expenseDetails.push(traced);
+        rawDebtsDebtorToCreditor.push(traced);
+      }
+
+      if (row.participant === creditor && expense.paidBy === debtor) {
+        const traced = { ...detail, direction: `${creditor} → ${debtor}` };
+        expenseDetails.push(traced);
+        rawDebtsCreditorToDebtor.push(traced);
+      }
+    });
+  });
+
+  expenseDetails.sort((a, b) => getExpenseTimestamp({ expenseDateTime: a.expenseDateTime }) - getExpenseTimestamp({ expenseDateTime: b.expenseDateTime }));
+
+  const totalDebtorToCreditor = rawDebtsDebtorToCreditor.reduce((sum, row) => sum + row.finalAmount, 0);
+  const totalCreditorToDebtor = rawDebtsCreditorToDebtor.reduce((sum, row) => sum + row.finalAmount, 0);
+  const finalNetAmount = Math.max(0, totalDebtorToCreditor - totalCreditorToDebtor);
+
+  return {
+    expenseDetails,
+    rawDebtsDebtorToCreditor,
+    rawDebtsCreditorToDebtor,
+    totalDebtorToCreditor,
+    totalCreditorToDebtor,
+    finalNetAmount,
+  };
 }
