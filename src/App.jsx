@@ -887,22 +887,39 @@ export default function App() {
       const { toBlob } = await import('html-to-image');
       const sourceNode = netDebtDetailCaptureRef.current;
       let blob;
-      const sourceStyleBackup = sourceNode.style.cssText;
-      const sourceCaptureAttrBackup = sourceNode.getAttribute('data-share-capture');
-      const scrollableNodes = Array.from(sourceNode.querySelectorAll('[data-share-scrollable="true"]'));
-      const scrollableStyleBackup = scrollableNodes.map((node) => node.style.cssText);
+      const SHARE_CAPTURE_WIDTH = 1280;
+      const sourceClone = sourceNode.cloneNode(true);
 
-      sourceNode.setAttribute('data-share-capture', 'true');
-      sourceNode.style.maxHeight = 'none';
-      sourceNode.style.height = 'auto';
-      sourceNode.style.overflow = 'visible';
+      sourceClone.setAttribute('data-share-capture', 'true');
+      sourceClone.style.display = 'block';
+      sourceClone.style.flex = 'none';
+      sourceClone.style.flexShrink = '0';
+      sourceClone.style.width = `${SHARE_CAPTURE_WIDTH}px`;
+      sourceClone.style.minWidth = `${SHARE_CAPTURE_WIDTH}px`;
+      sourceClone.style.maxWidth = `${SHARE_CAPTURE_WIDTH}px`;
+      sourceClone.style.height = 'auto';
+      sourceClone.style.maxHeight = 'none';
+      sourceClone.style.overflow = 'visible';
 
-      scrollableNodes.forEach((node) => {
+      sourceClone.querySelectorAll('[data-share-scrollable="true"]').forEach((node) => {
         node.style.maxHeight = 'none';
         node.style.height = 'auto';
         node.style.overflow = 'visible';
         node.style.paddingRight = '0';
       });
+
+      const captureHost = document.createElement('div');
+      captureHost.setAttribute('data-share-exclude', 'true');
+      captureHost.style.position = 'fixed';
+      captureHost.style.inset = '0';
+      captureHost.style.zIndex = '2147483647';
+      captureHost.style.pointerEvents = 'none';
+      captureHost.style.opacity = '0.01';
+      captureHost.style.display = 'block';
+      captureHost.style.overflow = 'visible';
+      captureHost.style.padding = '0';
+      captureHost.appendChild(sourceClone);
+      document.body.appendChild(captureHost);
 
       await new Promise((resolve) => {
         requestAnimationFrame(() => resolve());
@@ -911,10 +928,12 @@ export default function App() {
       try {
         // Keep image under browser canvas limits for very long proofs.
         const maxCanvasEdge = 16000;
-        const longestEdge = Math.max(sourceNode.scrollHeight, sourceNode.scrollWidth, 1);
+        const longestEdge = Math.max(sourceClone.scrollHeight, sourceClone.scrollWidth, 1);
         const safePixelRatio = Math.max(0.75, Math.min(2, maxCanvasEdge / longestEdge));
 
-        blob = await toBlob(sourceNode, {
+        blob = await toBlob(sourceClone, {
+          width: SHARE_CAPTURE_WIDTH,
+          canvasWidth: SHARE_CAPTURE_WIDTH,
           cacheBust: true,
           skipFonts: true,
           pixelRatio: safePixelRatio,
@@ -922,15 +941,7 @@ export default function App() {
           filter: (node) => !(node instanceof Element && node.dataset?.shareExclude === 'true'),
         });
       } finally {
-        sourceNode.style.cssText = sourceStyleBackup;
-        if (sourceCaptureAttrBackup === null) {
-          sourceNode.removeAttribute('data-share-capture');
-        } else {
-          sourceNode.setAttribute('data-share-capture', sourceCaptureAttrBackup);
-        }
-        scrollableNodes.forEach((node, index) => {
-          node.style.cssText = scrollableStyleBackup[index];
-        });
+        captureHost.remove();
       }
 
       if (!blob) {
@@ -1907,8 +1918,9 @@ export default function App() {
                           ))}
                         </ul>
                       )}
-                      <p className="mt-2 border-t border-ink/10 pt-2 text-sm font-medium">
-                        Total: <span className="font-mono">{formatRupiah(netDebtDetail.totalDebtorToCreditor)}</span>
+                      <p className="mt-2 flex items-center justify-between border-t border-ink/10 pt-2 text-sm font-medium">
+                        <span>Total:</span>
+                        <span className="font-mono">{formatRupiah(netDebtDetail.totalDebtorToCreditor)}</span>
                       </p>
                     </div>
 
@@ -1928,8 +1940,9 @@ export default function App() {
                           ))}
                         </ul>
                       )}
-                      <p className="mt-2 border-t border-ink/10 pt-2 text-sm font-medium">
-                        Total: <span className="font-mono">{formatRupiah(netDebtDetail.totalCreditorToDebtor)}</span>
+                      <p className="mt-2 flex items-center justify-between border-t border-ink/10 pt-2 text-sm font-medium">
+                        <span>Total:</span>
+                        <span className="font-mono">{formatRupiah(netDebtDetail.totalCreditorToDebtor)}</span>
                       </p>
                     </div>
                   </div>
