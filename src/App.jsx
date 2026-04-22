@@ -885,12 +885,46 @@ export default function App() {
 
     try {
       const { toBlob } = await import('html-to-image');
-      const blob = await toBlob(netDebtDetailCaptureRef.current, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: '#FAF7F2',
-        filter: (node) => !(node instanceof Element && node.dataset?.shareExclude === 'true'),
+      const sourceNode = netDebtDetailCaptureRef.current;
+      let blob;
+      const sourceStyleBackup = sourceNode.style.cssText;
+      const scrollableNodes = Array.from(sourceNode.querySelectorAll('[data-share-scrollable="true"]'));
+      const scrollableStyleBackup = scrollableNodes.map((node) => node.style.cssText);
+
+      sourceNode.style.maxHeight = 'none';
+      sourceNode.style.height = 'auto';
+      sourceNode.style.overflow = 'visible';
+
+      scrollableNodes.forEach((node) => {
+        node.style.maxHeight = 'none';
+        node.style.height = 'auto';
+        node.style.overflow = 'visible';
+        node.style.paddingRight = '0';
       });
+
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+
+      try {
+        // Keep image under browser canvas limits for very long proofs.
+        const maxCanvasEdge = 16000;
+        const longestEdge = Math.max(sourceNode.scrollHeight, sourceNode.scrollWidth, 1);
+        const safePixelRatio = Math.max(0.75, Math.min(2, maxCanvasEdge / longestEdge));
+
+        blob = await toBlob(sourceNode, {
+          cacheBust: true,
+          skipFonts: true,
+          pixelRatio: safePixelRatio,
+          backgroundColor: '#FAF7F2',
+          filter: (node) => !(node instanceof Element && node.dataset?.shareExclude === 'true'),
+        });
+      } finally {
+        sourceNode.style.cssText = sourceStyleBackup;
+        scrollableNodes.forEach((node, index) => {
+          node.style.cssText = scrollableStyleBackup[index];
+        });
+      }
 
       if (!blob) {
         throw new Error('Capture failed');
@@ -1790,7 +1824,7 @@ export default function App() {
                 <p className="mb-3 rounded-lg border border-ink/10 bg-paper px-3 py-2 text-xs text-ink/75">{netDebtShareFeedback}</p>
               )}
 
-              <div className="max-h-[76vh] space-y-4 overflow-y-auto pr-1">
+              <div data-share-scrollable="true" className="max-h-[76vh] space-y-4 overflow-y-auto pr-1">
                 <section className="rounded-xl border border-ink/15 bg-white p-3">
                   <h4 className="mb-2 font-medium text-ink">1. Expense Details</h4>
                   {netDebtDetail.expenseDetails.length === 0 ? (
