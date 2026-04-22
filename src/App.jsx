@@ -888,9 +888,11 @@ export default function App() {
       const sourceNode = netDebtDetailCaptureRef.current;
       let blob;
       const sourceStyleBackup = sourceNode.style.cssText;
+      const sourceCaptureAttrBackup = sourceNode.getAttribute('data-share-capture');
       const scrollableNodes = Array.from(sourceNode.querySelectorAll('[data-share-scrollable="true"]'));
       const scrollableStyleBackup = scrollableNodes.map((node) => node.style.cssText);
 
+      sourceNode.setAttribute('data-share-capture', 'true');
       sourceNode.style.maxHeight = 'none';
       sourceNode.style.height = 'auto';
       sourceNode.style.overflow = 'visible';
@@ -921,6 +923,11 @@ export default function App() {
         });
       } finally {
         sourceNode.style.cssText = sourceStyleBackup;
+        if (sourceCaptureAttrBackup === null) {
+          sourceNode.removeAttribute('data-share-capture');
+        } else {
+          sourceNode.setAttribute('data-share-capture', sourceCaptureAttrBackup);
+        }
         scrollableNodes.forEach((node, index) => {
           node.style.cssText = scrollableStyleBackup[index];
         });
@@ -995,6 +1002,19 @@ export default function App() {
 
         .fade-in {
           animation: fade-in 220ms ease-out;
+        }
+
+        [data-share-capture='true'] {
+          font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        [data-share-capture='true'] .font-display {
+          font-family: Georgia, 'Times New Roman', serif !important;
+          line-height: 1.18 !important;
+        }
+
+        [data-share-capture='true'] .font-mono {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important;
         }
 
         @keyframes fade-in {
@@ -1795,8 +1815,8 @@ export default function App() {
             >
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-display text-2xl text-ink">Net Debt Calculation Detail</h3>
-                  <p className="text-sm text-ink/70">
+                  <h3 className="font-display text-2xl leading-tight text-ink">Net Debt Calculation Detail</h3>
+                  <p className="mt-1 text-sm text-ink/70">
                     {selectedNetDebtRow.debtor} owes {selectedNetDebtRow.creditor} {formatRupiah(selectedNetDebtRow.amount)}
                   </p>
                 </div>
