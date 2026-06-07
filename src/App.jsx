@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import ConfirmDialog from './components/ConfirmDialog';
+import DebtSummation from './components/DebtSummation';
 import { APP_STORAGE_KEY, initialParticipants } from './config/billConfig';
 import {
   buildBreakdown,
@@ -2065,6 +2066,8 @@ export default function App() {
               </tbody>
             </table>
           </div>
+
+          <DebtSummation participants={participants} netRows={netRows} />
         </section>
       </div>
     </div>
